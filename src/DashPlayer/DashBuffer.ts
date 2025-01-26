@@ -1,22 +1,21 @@
-import { DashSegmentFetcher } from './DashSegmentFetcher'
+import { DashSegments } from './DashSegments'
 import { EventManager, EventType } from './EventManager'
 
 export class DashBuffer {
   private sourceBuffer: SourceBuffer
   private segmentFetchDelay: number = 20
-  private offsetSegmentNumber: number = 0
-  private startSegmentNumber: number = 0
+  private currentSegmentIndex: number = 0
   private videoElement: HTMLVideoElement
-  private dashSegmentFetcher: DashSegmentFetcher
+  private dashSegments: DashSegments
 
   private _isFetchingSegment: boolean = false
 
   private eventManager = new EventManager()
 
-  constructor(videoElement: HTMLVideoElement, sourceBuffer: SourceBuffer, dashSegmentFetcher: DashSegmentFetcher) {
+  constructor(videoElement: HTMLVideoElement, sourceBuffer: SourceBuffer, dashSegments: DashSegments) {
     this.sourceBuffer = sourceBuffer
     this.videoElement = videoElement
-    this.dashSegmentFetcher = dashSegmentFetcher
+    this.dashSegments = dashSegments
   }
 
   public addEventListener(event: EventType, listener: Function) {
@@ -27,19 +26,8 @@ export class DashBuffer {
     this.eventManager.removeEventListener(event, listener)
   }
 
-  private getLastSegmentNumber() {
-    return (
-      this.startSegmentNumber +
-      (Math.ceil(this.videoElement.duration / this.dashSegmentFetcher.getSegmentDurationSeconds()) - 1)
-    )
-  }
-
-  public getCurrentSegmentNumber() {
-    return this.offsetSegmentNumber + this.startSegmentNumber
-  }
-
   public async init() {
-    this.sourceBuffer.appendBuffer(await this.dashSegmentFetcher.loadInitSegment())
+    this.sourceBuffer.appendBuffer(await this.dashSegments.loadInitSegment())
     this.sourceBuffer.addEventListener('updateend', () => {
       if (this.hasBufferReachedEnd()) {
         this.eventManager.emit(EventType.BufferReachedEnd)
@@ -47,16 +35,12 @@ export class DashBuffer {
     })
   }
 
-  public setStartSegmentNumber(segmentNumber: number) {
-    this.startSegmentNumber = segmentNumber
-  }
-
   public setSegmentFetchDelay(delay: number) {
     this.segmentFetchDelay = delay
   }
 
   public hasBufferReachedEnd() {
-    return this.getCurrentSegmentNumber() > this.getLastSegmentNumber()
+    return this.currentSegmentIndex >= this.dashSegments.getSegmentCount()
   }
 
   public shouldFetchNextSegment() {
@@ -82,14 +66,15 @@ export class DashBuffer {
 
   public async seek(time: number) {
     this.sourceBuffer.abort()
-    this.offsetSegmentNumber = Math.floor(time / this.dashSegmentFetcher.getSegmentDurationSeconds())
+    this.sourceBuffer.remove(0, this.videoElement.duration)
+    this.currentSegmentIndex = this.dashSegments.getSegmentIndexAt(time)
   }
 
   private async _appendNextSegment() {
     try {
       this._isFetchingSegment = true
-      const nextSegment = await this.dashSegmentFetcher.loadSegment(this.getCurrentSegmentNumber())
-      this.offsetSegmentNumber++
+      const nextSegment = await this.dashSegments.loadSegment(this.currentSegmentIndex)
+      this.currentSegmentIndex++
       this.sourceBuffer.appendBuffer(nextSegment)
     } catch (e) {
       console.error('Error fetching segment', e)

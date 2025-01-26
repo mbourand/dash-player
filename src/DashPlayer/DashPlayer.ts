@@ -1,15 +1,6 @@
 import { DashBuffer } from './DashBuffer'
-import { DashManifest } from './DashManifest'
-import { DashSegmentFetcher, SegmentTemplateType } from './DashSegmentFetcher'
-import { EventType } from './EventManager'
-import { iso8601 } from './iso8601-duration'
-
-type MPDType = {
-  mediaPresentationDuration: string
-  minBufferTime: string
-  profiles: string
-  type: string
-}
+import { DashSegments } from './DashSegments'
+import { parse } from 'mpd-parser'
 
 export class DashPlayer {
   private videoElement: HTMLVideoElement | undefined
@@ -23,8 +14,8 @@ export class DashPlayer {
   private videoBuffer: DashBuffer | undefined
   private audioBuffer: DashBuffer | undefined
 
-  private videoSegmentFetcher: DashSegmentFetcher | undefined
-  private audioSegmentFetcher: DashSegmentFetcher | undefined
+  private videoSegments: DashSegments | undefined
+  private audioSegments: DashSegments | undefined
 
   constructor() {
     this.videoElement = undefined
@@ -37,7 +28,7 @@ export class DashPlayer {
   private async _fetchManifest(manifestUrl: string) {
     const response = await fetch(manifestUrl)
     const text = await response.text()
-    return DashManifest.fromXML(text)
+    return parse(text, { manifestUri: manifestUrl })
   }
 
   private async _onSourceOpen() {
@@ -45,65 +36,31 @@ export class DashPlayer {
       throw new Error('No media source, manifest, base URL or video element')
     }
 
-    const adaptationSet = this.manifest?.MPD.Period.AdaptationSet[0]
-    const mpd: MPDType = this.manifest?.MPD._attributes
-    const representation = adaptationSet.Representation[0]
-    const segmentTemplate: SegmentTemplateType = adaptationSet.SegmentTemplate._attributes
-    const videoMime = representation._attributes.mimeType ?? adaptationSet._attributes.mimeType
-    const videoCodecs = representation._attributes.codecs ?? adaptationSet._attributes.codecs
+    this.mediaSource.duration = this.manifest.duration
 
-    this.mediaSource.addEventListener('sourceended', (e) => {
-      console.log(e.target)
-    })
+    this.videoSegments = new DashSegments(this.manifest.playlists[0].segments)
 
-    this.mediaSource.duration = iso8601.parseDuration(mpd.mediaPresentationDuration)
-
-    this.videoSegmentFetcher = new DashSegmentFetcher(segmentTemplate, representation._attributes.id, this.baseURL)
-
-    const mimeCodec = `${videoMime}; codecs="${videoCodecs}"`
+    const videoCodecs = `video/mp4; codecs="${this.manifest.playlists[0].attributes.CODECS}"`
     this.videoBuffer = new DashBuffer(
       this.videoElement,
-      this.mediaSource.addSourceBuffer(mimeCodec),
-      this.videoSegmentFetcher
+      this.mediaSource.addSourceBuffer(videoCodecs),
+      this.videoSegments
     )
-
-    this.videoBuffer.setStartSegmentNumber(parseInt(segmentTemplate.startNumber, 10))
 
     await this.videoBuffer.init()
 
-    const audioMime = this.manifest?.MPD.Period.AdaptationSet[1]._attributes.mimeType
-    const audioCodecs = this.manifest?.MPD.Period.AdaptationSet[1].Representation._attributes.codecs
-    const audioMimeCodecs = `${audioMime}; codecs="${audioCodecs}"`
+    const audioPlaylist = this.manifest.mediaGroups.AUDIO.audio.main.playlists[0]
+    const audioCodecs = `audio/mp4; codecs="${audioPlaylist.attributes.CODECS}"`
 
-    this.audioSegmentFetcher = new DashSegmentFetcher(
-      this.manifest?.MPD.Period.AdaptationSet[1].SegmentTemplate._attributes,
-      this.manifest?.MPD.Period.AdaptationSet[1].Representation._attributes.id,
-      this.baseURL
-    )
+    this.audioSegments = new DashSegments(audioPlaylist.segments)
 
     this.audioBuffer = new DashBuffer(
       this.videoElement,
-      this.mediaSource.addSourceBuffer(audioMimeCodecs),
-      this.audioSegmentFetcher
-    )
-
-    this.audioBuffer.setStartSegmentNumber(
-      parseInt(this.manifest?.MPD.Period.AdaptationSet[1].SegmentTemplate._attributes.startNumber, 10)
+      this.mediaSource.addSourceBuffer(audioCodecs),
+      this.audioSegments
     )
 
     await this.audioBuffer.init()
-
-    this.videoBuffer.addEventListener(EventType.BufferReachedEnd, () => {
-      if (this.mediaSource?.readyState === 'open' && this.audioBuffer?.hasBufferReachedEnd()) {
-        this.mediaSource?.endOfStream()
-      }
-    })
-
-    this.audioBuffer.addEventListener(EventType.BufferReachedEnd, () => {
-      if (this.mediaSource?.readyState === 'open' && this.videoBuffer?.hasBufferReachedEnd()) {
-        this.mediaSource?.endOfStream()
-      }
-    })
   }
 
   public async load(manifestUrl: string) {
