@@ -1,3 +1,4 @@
+import { ABRController } from './ABRController'
 import { DashSegments } from './DashSegments'
 import { EventManager, EventType } from './EventManager'
 
@@ -10,6 +11,7 @@ export class DashBuffer {
 
   private _isFetchingSegment: boolean = false
 
+  private abrManager = new ABRController(10)
   private eventManager = new EventManager()
 
   constructor(videoElement: HTMLVideoElement, sourceBuffer: SourceBuffer, dashSegments: DashSegments) {
@@ -59,6 +61,7 @@ export class DashBuffer {
   }
 
   public async updateBuffer() {
+    // TODO: Try to find the best quality where the average fetch time will be less than 1
     if (this.shouldFetchNextSegment()) {
       await this._appendNextSegment()
     }
@@ -73,7 +76,13 @@ export class DashBuffer {
   private async _appendNextSegment() {
     try {
       this._isFetchingSegment = true
+      const start = Date.now()
       const nextSegment = await this.dashSegments.loadSegment(this.currentSegmentIndex)
+      const duration = (Date.now() - start) / 1000
+      this.abrManager.addFetch({
+        fetchDuration: duration,
+        segmentDuration: this.dashSegments.getSegment(this.currentSegmentIndex).duration,
+      })
       this.currentSegmentIndex++
       this.sourceBuffer.appendBuffer(nextSegment)
     } catch (e) {
