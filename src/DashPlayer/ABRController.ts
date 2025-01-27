@@ -1,5 +1,6 @@
 type SegmentFetchMetrics = {
   segmentDuration: number
+  segmentBandwidth: number
   fetchDuration: number
 }
 
@@ -11,9 +12,12 @@ export class ABRController {
     this.fetchHistorySize = historySize
   }
 
-  public getAverageFetchTimePerSecond() {
-    const fetchTimePerSecond = this.fetchHistory.map((fetch) => fetch.fetchDuration / fetch.segmentDuration)
-    return fetchTimePerSecond.reduce((a, b) => a + b, 0) / fetchTimePerSecond.length
+  public getAverageBandwidth() {
+    const totalNetworkBandwidth = this.fetchHistory.reduce(
+      (total, fetch) => total + (fetch.segmentDuration * fetch.segmentBandwidth) / fetch.fetchDuration,
+      0
+    )
+    return totalNetworkBandwidth / this.fetchHistory.length
   }
 
   public addFetch(metrics: SegmentFetchMetrics) {

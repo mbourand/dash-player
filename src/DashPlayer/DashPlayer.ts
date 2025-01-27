@@ -1,5 +1,5 @@
 import { DashBuffer } from './DashBuffer'
-import { DashSegments } from './DashSegments'
+import { DashPlaylistController } from './DashPlaylistController'
 import { parse } from 'mpd-parser'
 
 export class DashPlayer {
@@ -13,9 +13,6 @@ export class DashPlayer {
 
   private videoBuffer: DashBuffer | undefined
   private audioBuffer: DashBuffer | undefined
-
-  private videoSegments: DashSegments | undefined
-  private audioSegments: DashSegments | undefined
 
   constructor() {
     this.videoElement = undefined
@@ -38,26 +35,22 @@ export class DashPlayer {
 
     this.mediaSource.duration = this.manifest.duration
 
-    this.videoSegments = new DashSegments(this.manifest.playlists[0].segments)
-
     const videoCodecs = `video/mp4; codecs="${this.manifest.playlists[0].attributes.CODECS}"`
     this.videoBuffer = new DashBuffer(
       this.videoElement,
       this.mediaSource.addSourceBuffer(videoCodecs),
-      this.videoSegments
+      new DashPlaylistController(this.manifest.playlists, 0)
     )
 
     await this.videoBuffer.init()
 
-    const audioPlaylist = this.manifest.mediaGroups.AUDIO.audio.main.playlists[0]
-    const audioCodecs = `audio/mp4; codecs="${audioPlaylist.attributes.CODECS}"`
-
-    this.audioSegments = new DashSegments(audioPlaylist.segments)
+    const audioPlaylists = this.manifest.mediaGroups.AUDIO.audio.main.playlists
+    const audioCodecs = `audio/mp4; codecs="${audioPlaylists[0].attributes.CODECS}"`
 
     this.audioBuffer = new DashBuffer(
       this.videoElement,
       this.mediaSource.addSourceBuffer(audioCodecs),
-      this.audioSegments
+      new DashPlaylistController(audioPlaylists, 0)
     )
 
     await this.audioBuffer.init()
@@ -83,7 +76,7 @@ export class DashPlayer {
     })
 
     this.videoElement.addEventListener('play', () => {
-      this.updateIntervalId = setInterval(() => {
+      this.updateIntervalId = window.setInterval(() => {
         this.videoBuffer?.updateBuffer()
         this.audioBuffer?.updateBuffer()
       }, this.updateIntervalTimeout)

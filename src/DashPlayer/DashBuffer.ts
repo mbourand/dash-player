@@ -1,23 +1,29 @@
 import { ABRController } from './ABRController'
-import { DashSegments } from './DashSegments'
+import { DashPlaylistController } from './DashPlaylistController'
 import { EventManager, EventType } from './EventManager'
 
 export class DashBuffer {
   private sourceBuffer: SourceBuffer
-  private segmentFetchDelay: number = 20
+  private segmentFetchDelay: number = 10
   private currentSegmentIndex: number = 0
   private videoElement: HTMLVideoElement
-  private dashSegments: DashSegments
+  private dashPlaylistController: DashPlaylistController
 
   private _isFetchingSegment: boolean = false
 
   private abrManager = new ABRController(10)
   private eventManager = new EventManager()
 
-  constructor(videoElement: HTMLVideoElement, sourceBuffer: SourceBuffer, dashSegments: DashSegments) {
+  private seekTo: number | undefined = undefined
+
+  constructor(
+    videoElement: HTMLVideoElement,
+    sourceBuffer: SourceBuffer,
+    dashPlaylistController: DashPlaylistController
+  ) {
     this.sourceBuffer = sourceBuffer
     this.videoElement = videoElement
-    this.dashSegments = dashSegments
+    this.dashPlaylistController = dashPlaylistController
   }
 
   public addEventListener(event: EventType, listener: Function) {
@@ -28,13 +34,15 @@ export class DashBuffer {
     this.eventManager.removeEventListener(event, listener)
   }
 
+  public async switchPlaylist(playlistIndex: number) {
+    if (playlistIndex !== this.dashPlaylistController.getCurrentPlaylistIndex()) {
+      this.dashPlaylistController.switchPlaylist(playlistIndex)
+      await this.init()
+    }
+  }
+
   public async init() {
-    this.sourceBuffer.appendBuffer(await this.dashSegments.loadInitSegment())
-    this.sourceBuffer.addEventListener('updateend', () => {
-      if (this.hasBufferReachedEnd()) {
-        this.eventManager.emit(EventType.BufferReachedEnd)
-      }
-    })
+    this.sourceBuffer.appendBuffer(await this.dashPlaylistController.getSegments().loadInitSegment())
   }
 
   public setSegmentFetchDelay(delay: number) {
@@ -42,7 +50,7 @@ export class DashBuffer {
   }
 
   public hasBufferReachedEnd() {
-    return this.currentSegmentIndex >= this.dashSegments.getSegmentCount()
+    return this.currentSegmentIndex >= this.dashPlaylistController.getSegments().getSegmentCount()
   }
 
   public shouldFetchNextSegment() {
@@ -61,27 +69,38 @@ export class DashBuffer {
   }
 
   public async updateBuffer() {
-    // TODO: Try to find the best quality where the average fetch time will be less than 1
+    const averageBandwidth = this.abrManager.getAverageBandwidth()
+    const bestPlaylistIndex = this.dashPlaylistController.getBestPlaylistForBandwidth(averageBandwidth)
+    console.log('Best playlist', bestPlaylistIndex)
+    await this.switchPlaylist(bestPlaylistIndex)
+
+    if (this.seekTo !== undefined) {
+      this.sourceBuffer.abort()
+      this.sourceBuffer.remove(0, this.videoElement.duration)
+      this.currentSegmentIndex = this.dashPlaylistController.getSegments().getSegmentIndexAt(this.seekTo)
+      this.seekTo = undefined
+      return
+    }
+
     if (this.shouldFetchNextSegment()) {
       await this._appendNextSegment()
     }
   }
 
   public async seek(time: number) {
-    this.sourceBuffer.abort()
-    this.sourceBuffer.remove(0, this.videoElement.duration)
-    this.currentSegmentIndex = this.dashSegments.getSegmentIndexAt(time)
+    this.seekTo = time
   }
 
   private async _appendNextSegment() {
     try {
       this._isFetchingSegment = true
       const start = Date.now()
-      const nextSegment = await this.dashSegments.loadSegment(this.currentSegmentIndex)
+      const nextSegment = await this.dashPlaylistController.getSegments().loadSegment(this.currentSegmentIndex)
       const duration = (Date.now() - start) / 1000
       this.abrManager.addFetch({
         fetchDuration: duration,
-        segmentDuration: this.dashSegments.getSegment(this.currentSegmentIndex).duration,
+        segmentBandwidth: this.dashPlaylistController.getPlaylist().attributes.BANDWIDTH,
+        segmentDuration: this.dashPlaylistController.getSegments().getSegment(this.currentSegmentIndex).duration,
       })
       this.currentSegmentIndex++
       this.sourceBuffer.appendBuffer(nextSegment)
