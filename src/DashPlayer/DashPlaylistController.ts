@@ -8,7 +8,6 @@ export class DashPlaylistController {
   constructor(playlists: any[], currentPlaylistIndex: number) {
     this.playlists = playlists
     this.currentPlaylistIndex = currentPlaylistIndex
-    console.log('playlists', playlists, currentPlaylistIndex)
     this.segments = new DashSegments(playlists[currentPlaylistIndex].segments)
   }
 
@@ -32,6 +31,12 @@ export class DashPlaylistController {
   }
 
   public getBestPlaylistForBandwidth(bandwidth: number): number {
+    if (isNaN(bandwidth))
+      return this.playlists.reduce(
+        (acc, _, i) => (this.playlists[i].attributes.BANDWIDTH > this.playlists[acc].attributes.BANDWIDTH ? i : acc),
+        0
+      )
+
     const res = this.playlists.reduce((best, _, i) => {
       const canHandleBitrate = this.playlists[i].attributes.BANDWIDTH < bandwidth
       const isHigherQuality =

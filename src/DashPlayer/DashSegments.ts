@@ -10,8 +10,8 @@ export class DashSegments {
     return await response.arrayBuffer()
   }
 
-  public async loadSegment(segmentIndex: number) {
-    const response = await fetch(this.getSegment(segmentIndex).resolvedUri)
+  public async loadSegment(segmentIndex: number, signal?: AbortSignal) {
+    const response = await fetch(this.getSegment(segmentIndex).resolvedUri, { signal, keepalive: true })
     const data = await response.arrayBuffer()
     return data
   }
@@ -29,8 +29,11 @@ export class DashSegments {
     let segmentIndex = 0
 
     for (let i = 0; i < this.segments.length; i++) {
-      if (this.segments[i].presentationTime >= time) break
-      segmentIndex = i
+      if (
+        this.segments[i].presentationTime < time &&
+        this.segments[i].presentationTime > this.segments[segmentIndex].presentationTime
+      )
+        segmentIndex = i
     }
 
     return segmentIndex

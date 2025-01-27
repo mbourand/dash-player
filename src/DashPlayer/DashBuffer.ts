@@ -11,7 +11,7 @@ export class DashBuffer {
 
   private _isFetchingSegment: boolean = false
 
-  private abrManager = new ABRController(10)
+  private abrManager = new ABRController(3)
   private eventManager = new EventManager()
 
   private seekTo: number | undefined = undefined
@@ -54,7 +54,7 @@ export class DashBuffer {
   }
 
   public shouldFetchNextSegment() {
-    if (this._isFetchingSegment || this.hasBufferReachedEnd()) {
+    if (this._isFetchingSegment || this.sourceBuffer.updating || this.hasBufferReachedEnd()) {
       return false
     }
 
@@ -69,9 +69,8 @@ export class DashBuffer {
   }
 
   public async updateBuffer() {
-    const averageBandwidth = this.abrManager.getAverageBandwidth()
+    const averageBandwidth = this.abrManager.getAverageBandwidth() * 0.75
     const bestPlaylistIndex = this.dashPlaylistController.getBestPlaylistForBandwidth(averageBandwidth)
-    console.log('Best playlist', bestPlaylistIndex)
     await this.switchPlaylist(bestPlaylistIndex)
 
     if (this.seekTo !== undefined) {
@@ -92,10 +91,18 @@ export class DashBuffer {
   }
 
   private async _appendNextSegment() {
+    let timeoutId
+    const abortController = new AbortController()
+    const segmentMetadata = this.dashPlaylistController.getSegments().getSegment(this.currentSegmentIndex)
+    const maxRequestDuration = Math.max(2, segmentMetadata.duration)
+
     try {
       this._isFetchingSegment = true
       const start = Date.now()
-      const nextSegment = await this.dashPlaylistController.getSegments().loadSegment(this.currentSegmentIndex)
+      timeoutId = setTimeout(() => abortController.abort(), maxRequestDuration * 1000)
+      const nextSegment = await this.dashPlaylistController
+        .getSegments()
+        .loadSegment(this.currentSegmentIndex, abortController.signal)
       const duration = (Date.now() - start) / 1000
       this.abrManager.addFetch({
         fetchDuration: duration,
@@ -105,8 +112,28 @@ export class DashBuffer {
       this.currentSegmentIndex++
       this.sourceBuffer.appendBuffer(nextSegment)
     } catch (e) {
+      if (abortController.signal.aborted) {
+        const estimatedBandwidthAfterFailure =
+          ((segmentMetadata.duration * this.dashPlaylistController.getPlaylist().attributes.BANDWIDTH) /
+            maxRequestDuration) *
+          0.5
+        for (let i = 0; i < this.abrManager.getFetchHistorySize(); i++) {
+          this.abrManager.addFetch({
+            fetchDuration: maxRequestDuration / 0.5,
+            segmentBandwidth: this.dashPlaylistController.getPlaylist().attributes.BANDWIDTH,
+            segmentDuration: segmentMetadata.duration,
+          })
+        }
+        const bestPlaylistIndex =
+          this.dashPlaylistController.getBestPlaylistForBandwidth(estimatedBandwidthAfterFailure)
+        console.log(estimatedBandwidthAfterFailure, bestPlaylistIndex)
+        await this.switchPlaylist(bestPlaylistIndex)
+        return
+      }
+
       console.error('Error fetching segment', e)
     } finally {
+      clearTimeout(timeoutId)
       this._isFetchingSegment = false
     }
   }
